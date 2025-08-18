@@ -1,11 +1,17 @@
 mod builder;
-use crate::common_messages::pong;
+use crate::{common, eprint_rn, print_rn};
 use builder::*;
-use std::net::TcpListener;
-use std::net::{SocketAddr, TcpStream};
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{FutureExt, SinkExt, StreamExt, select};
+use std::net::SocketAddr;
 use std::sync::Arc;
-use std::thread::spawn;
-use tungstenite::{WebSocket, accept};
+use tokio::net::TcpListener;
+use tokio::sync;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::{broadcast, mpsc};
+use tokio_tungstenite::WebSocketStream;
+use tungstenite::Error as tError;
+use tungstenite::Message;
 
 #[derive(Debug)]
 pub enum Error {
@@ -22,7 +28,8 @@ pub struct Server {
     on_connect_message: Option<Message>,
 
     // flags
-    echo_incoming_messages_to_console: bool,
+    auto_pong: bool,
+    log_incoming_messages: bool,
 }
 
 impl Server {
@@ -39,55 +46,128 @@ impl Server {
             address: src.address.unwrap(),
             keybindings: Arc::from(src.keybindings),
             on_connect_message: src.on_connect_message,
-            echo_incoming_messages_to_console: src.echo_incoming_messages_to_console,
+            auto_pong: src.auto_pong,
+            log_incoming_messages: src.log_incoming_messages,
         })
     }
 
-    fn send(ws: &mut WebSocket<TcpStream>, msg: Message) {
-        match ws.send(msg.clone()) {
-            Ok(_) => println!("OUTCOMING :: {}", msg),
-            Err(e) => println!("Error sending message: {:?}", e),
+    async fn spawn_server_read_handler(
+        mut websocket_rx: SplitStream<WebSocketStream<tokio::net::TcpStream>>,
+        message_tx: mpsc::Sender<Message>,
+        auto_pong: bool,
+        log_incoming_messages: bool,
+    ) {
+        loop {
+            let msg = match websocket_rx.next().await {
+                Some(op) => match op {
+                    Ok(msg) => msg,
+                    Err(tError::ConnectionClosed) => {
+                        eprint_rn!("SERVER :: connection closed");
+                        break;
+                    }
+                    Err(err) => {
+                        eprint_rn!("SERVER :: {}", err.to_string());
+                        break;
+                    }
+                },
+                None => {
+                    continue;
+                }
+            };
+
+            if log_incoming_messages {
+                print_rn!("INCOMING :: {}", msg)
+            }
+
+            if auto_pong {
+                message_tx.send(msg).await.expect("Failed to send");
+            }
         }
     }
 
-    pub fn start(self) {
+    async fn spawn_server_write_handler(
+        mut websocket_tx: SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>,
+        mut message_rx: mpsc::Receiver<Message>,
+        mut keystroke_rx: Receiver<Key>,
+        keybindings: Arc<Keybindings>,
+    ) {
+        loop {
+            select! {
+                x1 = keystroke_rx.recv().fuse() => {
+                     match x1{
+                        Ok(key) => {
+                            print_rn!("SERVER :: KEYSTROKE :: {:?}", key);
+
+                            if let Some(kb) = keybindings.at(key) {
+                                let msg = kb();
+                                websocket_tx
+                                    .send(msg.clone())
+                                    .await
+                                    .expect("Failed to send");
+                                print_rn!("OUTCOMING :: {}", msg);
+                            }
+                        },
+                        Err(err) => {
+                            eprint_rn!("SERVER :: {}", err.to_string());
+                        }
+                    }
+                },
+                x2 = message_rx.recv().fuse() => {
+                    match x2 {
+                        Some(msg) => {
+                            websocket_tx.send(msg.clone()).await.expect("Failed to send");
+                            print_rn!("OUTCOMING :: {}", msg);
+                        },
+                        None => {}
+                    }
+                },
+            }
+        }
+    }
+
+    pub async fn start(self) {
+        let (keystroke_tx, _) = broadcast::channel::<Key>(4);
+
+        common::spawn_keystroke_listener(keystroke_tx.clone());
+
+        eprint_rn!("SERVER :: Starting at: {}", self.address.to_string());
+
         let server = TcpListener::bind(&self.address)
+            .await
             .expect(&format!("Failed to bind server to {}", &self.address));
 
-        for stream in server.incoming() {
-            let keybindings = Arc::clone(&self.keybindings);
-            let on_connect_message = self.on_connect_message.clone();
+        while let Ok((stream, _)) = server.accept().await {
+            let ws_stream = tokio_tungstenite::accept_async(stream).await.unwrap();
 
-            spawn(move || {
-                let mut websocket =
-                    accept(stream.unwrap()).expect("Error during websocket connection");
+            let (msg_tx, msg_rx) = mpsc::channel::<Message>(4);
 
-                if let Some(msg) = on_connect_message {
-                    Self::send(&mut websocket, msg)
-                }
+            let (mut ws_tx, ws_rx) = ws_stream.split();
 
-                loop {
-                    let msg = match websocket.read() {
-                        Ok(msg) => msg,
-                        Err(tungstenite::Error::ConnectionClosed) => {
-                            eprintln!("SERVER :: connection closed");
-                            break;
-                        }
-                        Err(err) => {
-                            eprintln!("SERVER :: {}", err.to_string());
-                            break;
-                        }
-                    };
+            let keybindings = self.keybindings.clone();
 
-                    if self.echo_incoming_messages_to_console {
-                        println!("INCOMING :: {}", msg)
-                    }
+            let keystroke_rx = keystroke_tx.subscribe();
 
-                    if msg.is_ping() {
-                        Self::send(&mut websocket, pong())
-                    }
-                }
-            });
+            if let Some(msg) = self.on_connect_message.clone() {
+                ws_tx.send(msg).await.expect("Failed to send");
+            }
+
+            tokio::spawn(async move {
+                Self::spawn_server_read_handler(
+                    ws_rx,
+                    msg_tx,
+                    self.auto_pong,
+                    self.log_incoming_messages,
+                )
+                .await;
+            })
+            .await
+            .expect("fail");
+
+            tokio::spawn(async move {
+                Self::spawn_server_write_handler(ws_tx, msg_rx, keystroke_rx, keybindings).await;
+            })
+            .await
+            .expect("fail");
         }
     }
 }

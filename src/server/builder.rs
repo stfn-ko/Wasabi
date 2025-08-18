@@ -14,7 +14,9 @@ pub struct ServerParts {
 
     pub(crate) on_connect_message: Option<Message>,
 
-    pub(crate) echo_incoming_messages_to_console: bool,
+    pub(crate) auto_pong: bool,
+
+    pub(crate) log_incoming_messages: bool,
 }
 
 impl Default for ServerParts {
@@ -23,7 +25,8 @@ impl Default for ServerParts {
             address: None,
             keybindings: Keybindings::new(),
             on_connect_message: None,
-            echo_incoming_messages_to_console: false,
+            auto_pong: false,
+            log_incoming_messages: false,
         }
     }
 }
@@ -44,9 +47,13 @@ impl ServerBuilder {
         }
     }
 
-    pub fn address(self, address: SocketAddr) -> Self {
+    pub fn address(self, address: &str) -> Self {
+        let socket_addr = address
+            .parse::<SocketAddr>()
+            .expect("Failed to set address");
+
         self.map(move |mut parts| {
-            parts.address = Some(address);
+            parts.address = Some(socket_addr);
             Ok(parts)
         })
     }
@@ -64,10 +71,17 @@ impl ServerBuilder {
             Ok(parts)
         })
     }
-    
-    pub fn echo_messages_to_console(self) -> Self {
+
+    pub fn auto_pong(self) -> Self {
         self.map(move |mut parts| {
-            parts.echo_incoming_messages_to_console = true;
+            parts.auto_pong = true;
+            Ok(parts)
+        })
+    }
+
+    pub fn log_incoming_messages(self) -> Self {
+        self.map(move |mut parts| {
+            parts.log_incoming_messages = true;
             Ok(parts)
         })
     }

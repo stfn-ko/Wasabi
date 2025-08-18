@@ -8,10 +8,10 @@ pub struct ClientBuilder {
 
 pub struct ClientParts {
     pub(crate) address: Option<Uri>,
-
     pub(crate) keybindings: Keybindings,
-
-    pub(crate) echo_incoming_messages_to_console: bool,
+    pub(crate) on_connect_message: Option<Message>,
+    pub(crate) auto_pong: bool,
+    pub(crate) log_incoming_messages: bool,
 }
 
 impl Default for ClientParts {
@@ -19,7 +19,9 @@ impl Default for ClientParts {
         ClientParts {
             address: None,
             keybindings: Keybindings::new(),
-            echo_incoming_messages_to_console: false,
+            on_connect_message: None,
+            auto_pong: false,
+            log_incoming_messages: false,
         }
     }
 }
@@ -40,11 +42,12 @@ impl ClientBuilder {
         }
     }
 
-    pub fn address(self, address: Uri) -> Self {
-        assert_eq!(address.scheme_str(), Some("ws"));
+    pub fn address(self, address: &str) -> Self {
+        let uri = address.parse::<Uri>().expect("Failed to set address");
+        assert_eq!(uri.scheme_str(), Some("ws"));
         
         self.map(move |mut parts| {
-            parts.address = Some(address);
+            parts.address = Some(uri);
             Ok(parts)
         })
     }
@@ -56,9 +59,23 @@ impl ClientBuilder {
         })
     }
 
-    pub fn echo_messages_to_console(self) -> Self {
+    pub fn on_connect_message(self, message: Message) -> Self {
         self.map(move |mut parts| {
-            parts.echo_incoming_messages_to_console = true;
+            parts.on_connect_message = Some(message);
+            Ok(parts)
+        })
+    }
+
+    pub fn auto_pong(self) -> Self {
+        self.map(move |mut parts| {
+            parts.auto_pong = true;
+            Ok(parts)
+        })
+    }
+
+    pub fn log_incoming_messages(self) -> Self {
+        self.map(move |mut parts| {
+            parts.log_incoming_messages = true;
             Ok(parts)
         })
     }

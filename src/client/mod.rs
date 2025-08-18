@@ -1,7 +1,9 @@
 mod builder;
 use crate::keybindings::Keybindings;
+use crate::{common, eprint_rn, print_rn};
 use builder::*;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tungstenite::connect;
 
 #[derive(Debug)]
@@ -11,12 +13,10 @@ pub enum ClientError {
 
 pub struct Client {
     address: Uri,
-
-    #[allow(dead_code)]
     keybindings: Arc<Keybindings>,
-
-    // flags
-    echo_incoming_messages_to_console: bool,
+    on_connect_message: Option<Message>,
+    ping_auto_response: bool,
+    log_incoming_messages: bool,
 }
 
 impl Client {
@@ -34,30 +34,76 @@ impl Client {
         Ok(Client {
             address: src.address.unwrap(),
             keybindings: Arc::from(src.keybindings),
-            echo_incoming_messages_to_console: src.echo_incoming_messages_to_console,
+            on_connect_message: src.on_connect_message,
+            ping_auto_response: src.auto_pong,
+            log_incoming_messages: src.log_incoming_messages,
         })
     }
 
-    pub fn start(self) {
-        let (mut websocket, _) = connect(&self.address)
-            .expect(&format!("Failed to connect client to {}", &self.address));
+    fn spawn_client_connection(
+        mut stroke_receiver: broadcast::Receiver<Key>,
+        address: Uri,
+        keybindings: Arc<Keybindings>,
+        on_connect_message: Option<Message>,
+        auto_pong: bool,
+        log_incoming_messages: bool,
+    ) {
+        let (mut connection, _) =
+            connect(&address).expect(&format!("Failed to connect to {}", address));
+
+        if let Some(msg) = on_connect_message {
+            common::send(&mut connection, msg)
+        }
 
         loop {
-            match websocket.read() {
-                Ok(msg) => {
-                    if self.echo_incoming_messages_to_console {
-                        println!("INCOMING :: {msg}");
-                    }
-                }
+            let msg = match connection.read() {
+                Ok(msg) => msg,
                 Err(tungstenite::Error::ConnectionClosed) => {
-                    eprintln!("CLIENT :: connection closed");
+                    eprint_rn!("CLIENT :: connection closed");
                     break;
                 }
                 Err(err) => {
-                    eprintln!("CLIENT :: {}", err.to_string());
+                    eprint_rn!("CLIENT :: {}", err.to_string());
                     break;
                 }
             };
+
+            if log_incoming_messages {
+                print_rn!("INCOMING :: {msg}");
+            }
+
+            if auto_pong && msg.is_ping() {
+                common::send(&mut connection, common::pong())
+            }
+
+            // if let Ok(key) = stroke_receiver.try_recv() {
+                // match keybindings.at(key) {
+                //     Some(message_cb) => common::send(&mut connection, message_cb()),
+                //     None => {}
+                // }
+            // }
+
+            match stroke_receiver.try_recv() {
+                Ok(key) => print_rn!("CLIENT :: RECEIVED :: {:?}", key),
+                Err(err) => eprint_rn!("CLIENT :: {}", err.to_string()),
+            }
         }
+    }
+
+    pub fn start(self) {
+        let (sender, _) = broadcast::channel::<Key>(4);
+
+        common::spawn_keystroke_listener(sender.clone());
+
+        print_rn!("CLIENT :: Connecting to: {}", self.address.to_string());
+
+        Self::spawn_client_connection(
+            sender.subscribe(),
+            self.address,
+            self.keybindings.clone(),
+            self.on_connect_message.clone(),
+            self.ping_auto_response.clone(),
+            self.log_incoming_messages.clone(),
+        );
     }
 }
