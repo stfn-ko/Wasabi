@@ -79,7 +79,7 @@ impl Server {
                 print_rn!("INCOMING :: {}", msg)
             }
 
-            if auto_pong {
+            if auto_pong && msg.is_ping(){
                 message_tx.send(msg).await.expect("Failed to send");
             }
         }
@@ -132,16 +132,23 @@ impl Server {
 
         eprint_rn!("SERVER :: Starting at: {}", self.address.to_string());
 
-        let server = TcpListener::bind(&self.address)
-            .await
-            .expect(&format!("Failed to bind server to {}", &self.address));
+        let try_socket = TcpListener::bind(&self.address).await;
+        let server = try_socket.expect("Failed to bind ");
 
         while let Ok((stream, _)) = server.accept().await {
-            let ws_stream = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let addr = stream
+                .peer_addr()
+                .expect("Connected streams should have a peer address");
 
-            let (msg_tx, msg_rx) = mpsc::channel::<Message>(4);
+            let ws_stream = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("Error during the websocket handshake occurred");
+
+            print_rn!("SERVER :: New connection: {addr}");
 
             let (mut ws_tx, ws_rx) = ws_stream.split();
+
+            let (msg_tx, msg_rx) = mpsc::channel::<Message>(4);
 
             let keybindings = self.keybindings.clone();
 
@@ -159,15 +166,11 @@ impl Server {
                     self.log_incoming_messages,
                 )
                 .await;
-            })
-            .await
-            .expect("fail");
+            });
 
             tokio::spawn(async move {
                 Self::spawn_server_write_handler(ws_tx, msg_rx, keystroke_rx, keybindings).await;
-            })
-            .await
-            .expect("fail");
+            });
         }
     }
 }

@@ -83,10 +83,10 @@ impl Client {
                 // }
             // }
 
-            match stroke_receiver.try_recv() {
-                Ok(key) => print_rn!("CLIENT :: RECEIVED :: {:?}", key),
-                Err(err) => eprint_rn!("CLIENT :: {}", err.to_string()),
-            }
+            // match stroke_receiver.try_recv() {
+            //     Ok(key) => print_rn!("CLIENT :: RECEIVED :: {:?}", key),
+            //     Err(err) => eprint_rn!("CLIENT :: {}", err.to_string()),
+            // }
         }
     }
 
