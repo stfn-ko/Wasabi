@@ -41,7 +41,7 @@ impl Client {
     }
 
     fn spawn_client_connection(
-        mut stroke_receiver: broadcast::Receiver<Key>,
+        stroke_receiver: broadcast::Receiver<Key>,
         address: Uri,
         keybindings: Arc<Keybindings>,
         on_connect_message: Option<Message>,
@@ -69,24 +69,14 @@ impl Client {
             };
 
             if log_incoming_messages {
-                print_rn!("INCOMING :: {msg}");
+                print_rn!("INC << {msg}");
             }
 
             if auto_pong && msg.is_ping() {
-                common::send(&mut connection, common::pong())
+                let resp = common::pong();
+                common::send(&mut connection, resp.clone());
+                print_rn!("OUT >> {}", resp);
             }
-
-            // if let Ok(key) = stroke_receiver.try_recv() {
-                // match keybindings.at(key) {
-                //     Some(message_cb) => common::send(&mut connection, message_cb()),
-                //     None => {}
-                // }
-            // }
-
-            // match stroke_receiver.try_recv() {
-            //     Ok(key) => print_rn!("CLIENT :: RECEIVED :: {:?}", key),
-            //     Err(err) => eprint_rn!("CLIENT :: {}", err.to_string()),
-            // }
         }
     }
 
