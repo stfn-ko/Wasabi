@@ -86,7 +86,7 @@ impl Server {
     }
 
     async fn spawn_server_write_handler(
-        mut websocket_tx: SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>,
+        mut websocket_tx: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_rx: mpsc::Receiver<Message>,
         mut keystroke_rx: Receiver<Key>,
         keybindings: Arc<Keybindings>,
@@ -167,7 +167,7 @@ impl Server {
 
         common::spawn_keystroke_listener(keystroke_tx.clone());
 
-        eprint_rn!("SERVER :: Starting at: {}", self.address.to_string());
+        print_rn!("SERVER :: Starting at: {}", self.address.to_string());
 
         let try_socket = TcpListener::bind(&self.address).await;
         let server = try_socket.expect("Failed to bind ");

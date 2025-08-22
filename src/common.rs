@@ -8,13 +8,13 @@ use tungstenite::{Message, Utf8Bytes, WebSocket};
 
 #[macro_export] macro_rules! print_rn {
     ($($arg:tt)*) => ({
-        print!("\r\n{}\r\n", format!($($arg)*));
+        print!("\r\n[{}] {}\r\n", chrono::Utc::now().to_rfc2822(), format!($($arg)*));
     })
 }
 
 #[macro_export] macro_rules! eprint_rn {
     ($($arg:tt)*) => ({
-        eprint!("\r\n{}\r\n", format!($($arg)*));
+        eprint!("\r\n[{}] {}\r\n", chrono::Utc::now().to_rfc2822(), format!($($arg)*));
     })
 }
 
