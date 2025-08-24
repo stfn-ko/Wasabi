@@ -1,12 +1,16 @@
+use futures_util::{FutureExt, StreamExt};
 mod builder;
-use crate::keybindings::Keybindings;
+use crate::ws_settings::WebSocketSettings;
 use crate::{common, eprint_rn, print_rn};
 use builder::*;
-use std::sync::Arc;
-use tokio::sync::broadcast;
-use tokio_tungstenite::tungstenite;
+use futures_util::select;
+use futures_util::stream::{SplitSink, SplitStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::http::Uri;
-use tokio_tungstenite::tungstenite::{Message, connect};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite};
 
 #[derive(Debug)]
 pub enum ClientError {
@@ -15,10 +19,7 @@ pub enum ClientError {
 
 pub struct Client {
     address: Uri,
-    keybindings: Arc<Keybindings>,
-    on_connect_message: Option<Message>,
-    ping_auto_response: bool,
-    log_incoming_messages: bool,
+    settings: WebSocketSettings,
 }
 
 impl Client {
@@ -35,67 +36,129 @@ impl Client {
 
         Ok(Client {
             address: src.address.unwrap(),
-            keybindings: Arc::from(src.keybindings),
-            on_connect_message: src.on_connect_message,
-            ping_auto_response: src.auto_pong,
-            log_incoming_messages: src.log_incoming_messages,
+            settings: src.settings,
         })
     }
 
-    fn spawn_client_connection(
-        stroke_receiver: broadcast::Receiver<Key>,
+    async fn spawn_client_write_handler(
+        mut websocket_tx: SplitSink<WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>, Message>,
+        mut internal_message_rx: mpsc::Receiver<Message>,
+        mut user_message_rx: Receiver<Message>,
+    ) {        
+        loop {
+            select! {
+                x1 = internal_message_rx.recv().fuse() => {
+                    match x1 {
+                        Some(msg) => {
+                            common::async_send(&mut websocket_tx, msg).await;
+                        },
+                        None => {}
+                    }
+                },
+                x2 = user_message_rx.recv().fuse() => {
+                     match x2{
+                        Ok(msg) => {
+                            common::async_send(&mut websocket_tx, msg).await;
+                        },
+                        Err(err) => {
+                            eprint_rn!("CLIENT :: {}", err.to_string());
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    async fn spawn_client_read_handler(
+        mut websocket_rx: SplitStream<WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>>,
+        message_tx: mpsc::Sender<Message>,
         address: Uri,
-        keybindings: Arc<Keybindings>,
-        on_connect_message: Option<Message>,
         auto_pong: bool,
         log_incoming_messages: bool,
-    ) {
-        let (mut connection, _) =
-            connect(&address).expect(&format!("Failed to connect to {}", address));
-
-        if let Some(msg) = on_connect_message {
-            common::send(&mut connection, msg)
-        }
-
+    ) {        
         loop {
-            let msg = match connection.read() {
-                Ok(msg) => msg,
-                Err(tungstenite::Error::ConnectionClosed) => {
-                    eprint_rn!("CLIENT :: connection closed");
-                    break;
-                }
-                Err(err) => {
-                    eprint_rn!("CLIENT :: {}", err.to_string());
-                    break;
+            let msg = match websocket_rx.next().await {
+                Some(op) => match op {
+                    Ok(msg) => msg,
+                    Err(tungstenite::Error::ConnectionClosed) => {
+                        eprint_rn!("CLIENT :: {} | connection closed:", address);
+                        break;
+                    }
+                    Err(err) => {
+                        eprint_rn!("CLIENT :: {} | {}", address, err.to_string());
+                        break;
+                    }
+                },
+                None => {
+                    continue;
                 }
             };
 
             if log_incoming_messages {
-                print_rn!("INC << {msg}");
+                print_rn!("INC [{}] << {}", address, msg)
             }
 
             if auto_pong && msg.is_ping() {
-                let resp = common::pong();
-                common::send(&mut connection, resp.clone());
-                print_rn!("OUT >> {}", resp);
+                message_tx.send(common::pong()).await.expect("Failed to send");
             }
         }
     }
 
-    pub fn start(self) {
-        let (sender, _) = broadcast::channel::<Key>(4);
+    async fn spawn_client_connection(
+        usr_msg_rx: Receiver<Message>,
+        address: Uri,
+        on_connect_message: Option<Message>,
+        auto_pong: bool,
+        log_incoming_messages: bool,
+    ) {
+        let (connection, _) = match connect_async(&address).await {
+            Ok(connection) => connection,
+            Err(e) => {
+                eprint_rn!("CLIENT :: Failed to connect: {e}");
+                return;
+            }
+        };
 
-        common::spawn_keystroke_listener(sender.clone());
+        let (mut ws_tx, ws_rx) = connection.split();
+
+        if let Some(msg) = on_connect_message {
+            common::async_send(&mut ws_tx, msg).await;
+        }
+        
+        let (internal_msg_tx, internal_msg_rx) = mpsc::channel::<Message>(4);
+
+        let read_handle = tokio::spawn(async move {
+            Self::spawn_client_read_handler(
+                ws_rx,
+                internal_msg_tx,
+                address,
+                auto_pong,
+                log_incoming_messages,
+            )
+            .await;
+        });
+
+        let write_handle = tokio::spawn(async move {
+            Self::spawn_client_write_handler(ws_tx, internal_msg_rx, usr_msg_rx).await;
+        });
+
+        let _ = tokio::join!(read_handle, write_handle);
+    }
+
+    pub async fn start(self) {
+        let (usr_msg_tx, _) = broadcast::channel::<Message>(4);
+
+        common::spawn_keystroke_listener(usr_msg_tx.clone(), self.settings.keybindings);
 
         print_rn!("CLIENT :: Connecting to: {}", self.address.to_string());
 
         Self::spawn_client_connection(
-            sender.subscribe(),
+            usr_msg_tx.subscribe(),
             self.address,
-            self.keybindings.clone(),
-            self.on_connect_message.clone(),
-            self.ping_auto_response.clone(),
-            self.log_incoming_messages.clone(),
-        );
+            self.settings.on_connect_message,
+            self.settings.auto_pong,
+            self.settings.log_incoming_messages,
+        )
+        .await;
     }
 }

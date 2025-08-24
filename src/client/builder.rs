@@ -1,6 +1,6 @@
-pub(crate) use crate::keybindings::*;
-pub(crate) use tokio_tungstenite::tungstenite::http::Uri;
 use crate::client::{Client, ClientError};
+use crate::ws_settings::WebSocketSettings;
+pub(crate) use tokio_tungstenite::tungstenite::http::Uri;
 
 pub struct ClientBuilder {
     parts: Result<ClientParts, ClientError>,
@@ -8,20 +8,14 @@ pub struct ClientBuilder {
 
 pub struct ClientParts {
     pub(crate) address: Option<Uri>,
-    pub(crate) keybindings: Keybindings,
-    pub(crate) on_connect_message: Option<Message>,
-    pub(crate) auto_pong: bool,
-    pub(crate) log_incoming_messages: bool,
+    pub(crate) settings: WebSocketSettings,
 }
 
 impl Default for ClientParts {
     fn default() -> Self {
         ClientParts {
             address: None,
-            keybindings: Keybindings::new(),
-            on_connect_message: None,
-            auto_pong: false,
-            log_incoming_messages: false,
+            settings: WebSocketSettings::default(),
         }
     }
 }
@@ -45,37 +39,16 @@ impl ClientBuilder {
     pub fn address(self, address: &str) -> Self {
         let uri = address.parse::<Uri>().expect("Failed to set address");
         assert_eq!(uri.scheme_str(), Some("ws"));
-        
+
         self.map(move |mut parts| {
             parts.address = Some(uri);
             Ok(parts)
         })
     }
 
-    pub fn add_keybinding(self, key: Key, message: fn() -> Message) -> Self {
+    pub fn settings(self, settings: WebSocketSettings) -> Self {
         self.map(move |mut parts| {
-            parts.keybindings.add(key, message);
-            Ok(parts)
-        })
-    }
-
-    pub fn on_connect_message(self, message: Message) -> Self {
-        self.map(move |mut parts| {
-            parts.on_connect_message = Some(message);
-            Ok(parts)
-        })
-    }
-
-    pub fn auto_pong(self) -> Self {
-        self.map(move |mut parts| {
-            parts.auto_pong = true;
-            Ok(parts)
-        })
-    }
-
-    pub fn log_incoming_messages(self) -> Self {
-        self.map(move |mut parts| {
-            parts.log_incoming_messages = true;
+            parts.settings = settings;
             Ok(parts)
         })
     }

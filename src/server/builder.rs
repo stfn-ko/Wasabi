@@ -1,7 +1,6 @@
-pub(crate) use crate::keybindings::*;
 pub(crate) use crate::server::{Error, Server};
+use crate::ws_settings::WebSocketSettings;
 pub(crate) use std::net::SocketAddr;
-pub(crate) use tokio_tungstenite::tungstenite::Message;
 
 pub struct ServerBuilder {
     parts: Result<ServerParts, Error>,
@@ -9,24 +8,14 @@ pub struct ServerBuilder {
 
 pub struct ServerParts {
     pub(crate) address: Option<SocketAddr>,
-
-    pub(crate) keybindings: Keybindings,
-
-    pub(crate) on_connect_message: Option<Message>,
-
-    pub(crate) auto_pong: bool,
-
-    pub(crate) log_incoming_messages: bool,
+    pub(crate) settings: WebSocketSettings,
 }
 
 impl Default for ServerParts {
     fn default() -> Self {
         ServerParts {
             address: None,
-            keybindings: Keybindings::new(),
-            on_connect_message: None,
-            auto_pong: false,
-            log_incoming_messages: false,
+            settings: WebSocketSettings::default(),
         }
     }
 }
@@ -58,30 +47,9 @@ impl ServerBuilder {
         })
     }
 
-    pub fn add_keybinding(self, key: Key, message: fn() -> Message) -> Self {
+    pub fn settings(self, settings: WebSocketSettings) -> Self {
         self.map(move |mut parts| {
-            parts.keybindings.add(key, message);
-            Ok(parts)
-        })
-    }
-
-    pub fn on_connect_message(self, message: Message) -> Self {
-        self.map(move |mut parts| {
-            parts.on_connect_message = Some(message);
-            Ok(parts)
-        })
-    }
-
-    pub fn auto_pong(self) -> Self {
-        self.map(move |mut parts| {
-            parts.auto_pong = true;
-            Ok(parts)
-        })
-    }
-
-    pub fn log_incoming_messages(self) -> Self {
-        self.map(move |mut parts| {
-            parts.log_incoming_messages = true;
+            parts.settings = settings;
             Ok(parts)
         })
     }
