@@ -8,5 +8,5 @@ pub use crate::server::*;
 pub use tokio;
 pub use std::net::SocketAddr;
 pub use termion::event::Key;
-pub use tungstenite::http::Uri;
-pub use tungstenite::{Bytes, Message, Utf8Bytes};
+pub use tokio_tungstenite::tungstenite::http::Uri;
+pub use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};

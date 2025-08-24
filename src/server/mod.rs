@@ -9,8 +9,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::WebSocketStream;
-use tungstenite::Error as tError;
-use tungstenite::Message;
+use tokio_tungstenite::tungstenite::Error as tError;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug)]
 pub enum Error {
@@ -86,7 +86,7 @@ impl Server {
     }
 
     async fn spawn_server_write_handler(
-        mut websocket_tx: SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>,
+        mut websocket_tx: SplitSink<WebSocketStream<TcpStream>, Message>,
         mut message_rx: mpsc::Receiver<Message>,
         mut keystroke_rx: Receiver<Key>,
         keybindings: Arc<Keybindings>,

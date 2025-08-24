@@ -1,7 +1,7 @@
 pub(crate) use crate::keybindings::*;
 pub(crate) use crate::server::{Error, Server};
 pub(crate) use std::net::SocketAddr;
-pub(crate) use tungstenite::Message;
+pub(crate) use tokio_tungstenite::tungstenite::Message;
 
 pub struct ServerBuilder {
     parts: Result<ServerParts, Error>,

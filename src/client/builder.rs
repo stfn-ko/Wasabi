@@ -1,5 +1,5 @@
 pub(crate) use crate::keybindings::*;
-pub(crate) use tungstenite::http::Uri;
+pub(crate) use tokio_tungstenite::tungstenite::http::Uri;
 use crate::client::{Client, ClientError};
 
 pub struct ClientBuilder {

@@ -1,7 +1,7 @@
 use crate::common::{close, ping};
 use std::collections::HashMap;
 pub(crate) use termion::event::Key;
-pub(crate) use tungstenite::Message;
+pub(crate) use tokio_tungstenite::tungstenite::Message;
 
 pub struct Keybindings {
     internal: HashMap<Key, fn() -> Message>,

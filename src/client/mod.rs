@@ -4,7 +4,9 @@ use crate::{common, eprint_rn, print_rn};
 use builder::*;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tungstenite::connect;
+use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::{Message, connect};
 
 #[derive(Debug)]
 pub enum ClientError {

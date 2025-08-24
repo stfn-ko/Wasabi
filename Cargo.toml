@@ -7,5 +7,4 @@ edition = "2024"
 termion = "4.0.5"
 tokio = { version = "1.47.1", features = ["sync", "net", "rt", "macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.27.0"
-tungstenite = "0.27.0"
 futures-util = "0.3.31"
