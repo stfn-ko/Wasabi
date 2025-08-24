@@ -8,14 +8,14 @@ use tokio::sync::broadcast;
 #[macro_export]
 macro_rules! print_rn {
     ($($arg:tt)*) => ({
-        print!("\r\n{}\r\n", format!($($arg)*));
+        print!("\r\n[{}] {}\r\n", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false) , format!($($arg)*));
     })
 }
 
 #[macro_export]
 macro_rules! eprint_rn {
     ($($arg:tt)*) => ({
-        eprint!("\r\n{}\r\n", format!($($arg)*));
+        eprint!("\r\n[{}] {}\r\n", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false) , format!($($arg)*));
     })
 }
 
