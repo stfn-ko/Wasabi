@@ -64,7 +64,7 @@ impl Server {
             };
 
             if log_incoming_messages {
-                print_rn!("INC [{}] << {}", address, msg)
+                print_rn!("[{}] INC << {}", address, msg)
             }
 
             if auto_pong && msg.is_ping() {
