@@ -1,16 +1,15 @@
 mod builder;
-use crate::{common, eprint_rn, print_rn};
+use crate::ws_settings::WebSocketSettings;
+use crate::{common, eprint_rn, print_rn, tungstenite};
 use builder::*;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{FutureExt, SinkExt, StreamExt, select};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::WebSocketStream;
-use tungstenite::Error as tError;
-use tungstenite::Message;
+use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Debug)]
 pub enum Error {
@@ -20,15 +19,7 @@ pub enum Error {
 
 pub struct Server {
     address: SocketAddr,
-
-    #[allow(dead_code)]
-    keybindings: Arc<Keybindings>,
-
-    on_connect_message: Option<Message>,
-
-    // flags
-    auto_pong: bool,
-    log_incoming_messages: bool,
+    settings: WebSocketSettings,
 }
 
 impl Server {
@@ -43,10 +34,7 @@ impl Server {
 
         Ok(Server {
             address: src.address.unwrap(),
-            keybindings: Arc::from(src.keybindings),
-            on_connect_message: src.on_connect_message,
-            auto_pong: src.auto_pong,
-            log_incoming_messages: src.log_incoming_messages,
+            settings: src.settings,
         })
     }
 
@@ -61,7 +49,7 @@ impl Server {
             let msg = match websocket_rx.next().await {
                 Some(op) => match op {
                     Ok(msg) => msg,
-                    Err(tError::ConnectionClosed) => {
+                    Err(tungstenite::Error::ConnectionClosed) => {
                         eprint_rn!("SERVER :: {} | connection closed:", address);
                         break;
                     }
@@ -76,47 +64,39 @@ impl Server {
             };
 
             if log_incoming_messages {
-                print_rn!("INC [{}] << {}", address, msg)
+                print_rn!("[{}] INC << {}", address, msg)
             }
 
             if auto_pong && msg.is_ping() {
-                message_tx.send(msg).await.expect("Failed to send");
+                message_tx
+                    .send(common::pong())
+                    .await
+                    .expect("Failed to send");
             }
         }
     }
 
     async fn spawn_server_write_handler(
         mut websocket_tx: SplitSink<WebSocketStream<TcpStream>, Message>,
-        mut message_rx: mpsc::Receiver<Message>,
-        mut keystroke_rx: Receiver<Key>,
-        keybindings: Arc<Keybindings>,
+        mut internal_message_rx: mpsc::Receiver<Message>,
+        mut user_message_rx: Receiver<Message>,
     ) {
         loop {
             select! {
-                x1 = keystroke_rx.recv().fuse() => {
+                x1 = user_message_rx.recv().fuse() => {
                      match x1{
-                        Ok(key) => {
-                            if let Some(kb) = keybindings.at(key) {
-                                let msg = kb();
-
-                                websocket_tx
-                                    .send(msg.clone())
-                                    .await
-                                    .expect("Failed to send");
-
-                                print_rn!("OUT >> {}", msg);
-                            }
+                        Ok(msg) => {
+                            common::async_send(&mut websocket_tx, msg).await;
                         },
                         Err(err) => {
                             eprint_rn!("SERVER :: {}", err.to_string());
                         }
                     }
                 },
-                x2 = message_rx.recv().fuse() => {
+                x2 = internal_message_rx.recv().fuse() => {
                     match x2 {
                         Some(msg) => {
-                            websocket_tx.send(msg.clone()).await.expect("Failed to send");
-                            print_rn!("OUT >> {}", msg);
+                            common::async_send(&mut websocket_tx, msg).await;
                         },
                         None => {}
                     }
@@ -127,9 +107,8 @@ impl Server {
 
     async fn start_new_connection(
         stream: TcpStream,
-        keystroke_rx: Receiver<Key>,
-        keybindings: Arc<Keybindings>,
-        on_connect_message: Option<Message>,
+        usr_msg_rx: Receiver<Message>,
+        on_connect_message: Option<&Message>,
         auto_pong: bool,
         log_incoming_messages: bool,
     ) {
@@ -145,7 +124,7 @@ impl Server {
 
         let (mut ws_tx, ws_rx) = ws_stream.split();
 
-        let (msg_tx, msg_rx) = mpsc::channel::<Message>(4);
+        let (internal_msg_tx, internal_msg_rx) = mpsc::channel::<Message>(4);
 
         if let Some(msg) = on_connect_message {
             ws_tx.send(msg.clone()).await.expect("Failed to send");
@@ -153,19 +132,25 @@ impl Server {
         }
 
         tokio::spawn(async move {
-            Self::spawn_server_read_handler(ws_rx, msg_tx, addr, auto_pong, log_incoming_messages)
-                .await;
+            Self::spawn_server_read_handler(
+                ws_rx,
+                internal_msg_tx,
+                addr,
+                auto_pong,
+                log_incoming_messages,
+            )
+            .await;
         });
 
         tokio::spawn(async move {
-            Self::spawn_server_write_handler(ws_tx, msg_rx, keystroke_rx, keybindings).await;
+            Self::spawn_server_write_handler(ws_tx, internal_msg_rx, usr_msg_rx).await;
         });
     }
 
     pub async fn start(self) {
-        let (keystroke_tx, _) = broadcast::channel::<Key>(4);
+        let (usr_msg_tx, _) = broadcast::channel::<Message>(4);
 
-        common::spawn_keystroke_listener(keystroke_tx.clone());
+        common::spawn_keystroke_listener(usr_msg_tx.clone(), self.settings.keybindings);
 
         print_rn!("SERVER :: Starting at: {}", self.address.to_string());
 
@@ -175,11 +160,10 @@ impl Server {
         while let Ok((stream, _)) = server.accept().await {
             Self::start_new_connection(
                 stream,
-                keystroke_tx.subscribe(),
-                self.keybindings.clone(),
-                self.on_connect_message.clone(),
-                self.auto_pong,
-                self.log_incoming_messages,
+                usr_msg_tx.subscribe(),
+                self.settings.on_connect_message.as_ref(),
+                self.settings.auto_pong,
+                self.settings.log_incoming_messages,
             )
             .await;
         }

@@ -1,20 +1,26 @@
-use crate::Bytes;
+use crate::keybindings::Keybindings;
+use futures_util::SinkExt;
+use futures_util::stream::SplitSink;
 use std::thread;
 use termion::event::Key;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::broadcast;
-use tungstenite::protocol::CloseFrame;
-use tungstenite::protocol::frame::coding::CloseCode;
-use tungstenite::{Message, Utf8Bytes, WebSocket};
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};
 
-#[macro_export] macro_rules! print_rn {
+#[macro_export]
+macro_rules! print_rn {
     ($($arg:tt)*) => ({
-        print!("\r\n[{}] {}\r\n", chrono::Utc::now().to_rfc2822(), format!($($arg)*));
+        print!("\r\n[{}] {}\r\n", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false) , format!($($arg)*));
     })
 }
 
-#[macro_export] macro_rules! eprint_rn {
+#[macro_export]
+macro_rules! eprint_rn {
     ($($arg:tt)*) => ({
-        eprint!("\r\n[{}] {}\r\n", chrono::Utc::now().to_rfc2822(), format!($($arg)*));
+        eprint!("\r\n[{}] {}\r\n", chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false) , format!($($arg)*));
     })
 }
 
@@ -36,18 +42,20 @@ pub fn close() -> Message {
     }))
 }
 
-pub(crate) fn send<StreamType>(ws: &mut WebSocket<StreamType>, msg: Message)
-where
-    StreamType: std::io::Read,
-    StreamType: std::io::Write,
-{
-    match ws.send(msg.clone()) {
-        Ok(_) => print_rn!("OUTCOMING :: {}", msg),
+pub(crate) async fn async_send(
+    ws: &mut SplitSink<WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>, Message>,
+    msg: Message,
+) {
+    match ws.send(msg.clone()).await {
+        Ok(_) => print_rn!("OUT >> {}", msg),
         Err(e) => eprint_rn!("Error sending message: {:?}", e),
     }
 }
 
-pub(crate) fn spawn_keystroke_listener(sender: broadcast::Sender<Key>) {
+pub(crate) fn spawn_keystroke_listener(
+    sender: broadcast::Sender<Message>,
+    keybindings: Option<Keybindings>,
+) {
     use std::io::{Write, stdin, stdout};
     use termion::clear;
     use termion::cursor;
@@ -72,8 +80,10 @@ pub(crate) fn spawn_keystroke_listener(sender: broadcast::Sender<Key>) {
             match k {
                 Ok(Key::Ctrl('c')) => return, // todo: sigkill application
                 Ok(k) => {
-                    if sender.receiver_count() > 0 {
-                        let _ = sender.send(k.clone());
+                    if sender.receiver_count() > 0 && keybindings.is_some() {
+                        if let Some(msg_cb) = keybindings.as_ref().unwrap().at(k) {
+                            sender.send(msg_cb()).expect("Error sending message");
+                        }
                     }
 
                     print_rn!("KEY :: {:?}\r", k);
