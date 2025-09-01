@@ -10,7 +10,6 @@ pub struct WebSocketSettingsBuilder {
 pub struct WebSocketSettingsParts {
     pub(crate) keybindings: Option<Keybindings>,
     pub(crate) on_connect_message: Option<Message>,
-    pub(crate) auto_pong: bool,
     pub(crate) log_incoming_messages: bool,
 }
 
@@ -19,7 +18,6 @@ impl Default for WebSocketSettingsParts {
         WebSocketSettingsParts {
             keybindings: None,
             on_connect_message: None,
-            auto_pong: false,
             log_incoming_messages: false,
         }
     }
@@ -57,14 +55,7 @@ impl WebSocketSettingsBuilder {
             Ok(parts)
         })
     }
-
-    pub fn auto_pong(self) -> Self {
-        self.map(move |mut parts| {
-            parts.auto_pong = true;
-            Ok(parts)
-        })
-    }
-
+    
     pub fn log_incoming_messages(self) -> Self {
         self.map(move |mut parts| {
             parts.log_incoming_messages = true;

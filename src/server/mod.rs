@@ -1,13 +1,13 @@
 mod builder;
 use crate::ws_settings::WebSocketSettings;
-use crate::{common, eprint_rn, print_rn, tungstenite};
+use crate::{common, eprint_rn, print_rn};
 use builder::*;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{FutureExt, SinkExt, StreamExt, select};
+use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -40,67 +40,44 @@ impl Server {
 
     async fn spawn_server_read_handler(
         mut websocket_rx: SplitStream<WebSocketStream<TcpStream>>,
-        message_tx: mpsc::Sender<Message>,
         address: SocketAddr,
-        auto_pong: bool,
         log_incoming_messages: bool,
     ) {
-        loop {
-            let msg = match websocket_rx.next().await {
-                Some(op) => match op {
-                    Ok(msg) => msg,
-                    Err(tungstenite::Error::ConnectionClosed) => {
-                        eprint_rn!("SERVER :: {} | connection closed:", address);
-                        break;
-                    }
-                    Err(err) => {
-                        eprint_rn!("SERVER :: {} | {}", address, err.to_string());
-                        break;
-                    }
-                },
-                None => {
-                    continue;
+        while let Some(msg) = websocket_rx.next().await {
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(err) => {
+                    eprint_rn!("SERVER ERROR :: {} | {}", address, err);
+                    break;
                 }
             };
 
             if log_incoming_messages {
-                print_rn!("[{}] INC << {}", address, msg)
-            }
-
-            if auto_pong && msg.is_ping() {
-                message_tx
-                    .send(common::pong())
-                    .await
-                    .expect("Failed to send");
+                match msg {
+                    Message::Pong(_) => {
+                        print_rn!("[{}] INC << pong", address)
+                    }
+                    Message::Text(t) => {
+                        print_rn!("[{}] INC << {}", address, t)
+                    }
+                    _ => {}
+                }
             }
         }
     }
 
     async fn spawn_server_write_handler(
         mut websocket_tx: SplitSink<WebSocketStream<TcpStream>, Message>,
-        mut internal_message_rx: mpsc::Receiver<Message>,
         mut user_message_rx: Receiver<Message>,
     ) {
         loop {
-            select! {
-                x1 = user_message_rx.recv().fuse() => {
-                     match x1{
-                        Ok(msg) => {
-                            common::async_send(&mut websocket_tx, msg).await;
-                        },
-                        Err(err) => {
-                            eprint_rn!("SERVER :: {}", err.to_string());
-                        }
-                    }
-                },
-                x2 = internal_message_rx.recv().fuse() => {
-                    match x2 {
-                        Some(msg) => {
-                            common::async_send(&mut websocket_tx, msg).await;
-                        },
-                        None => {}
-                    }
-                },
+            match user_message_rx.recv().await {
+                Ok(msg) => {
+                    common::async_send(&mut websocket_tx, msg).await;
+                }
+                Err(err) => {
+                    eprint_rn!("SERVER :: {}", err.to_string());
+                }
             }
         }
     }
@@ -109,7 +86,6 @@ impl Server {
         stream: TcpStream,
         usr_msg_rx: Receiver<Message>,
         on_connect_message: Option<&Message>,
-        auto_pong: bool,
         log_incoming_messages: bool,
     ) {
         let addr = stream
@@ -124,27 +100,20 @@ impl Server {
 
         let (mut ws_tx, ws_rx) = ws_stream.split();
 
-        let (internal_msg_tx, internal_msg_rx) = mpsc::channel::<Message>(4);
-
         if let Some(msg) = on_connect_message {
             ws_tx.send(msg.clone()).await.expect("Failed to send");
             print_rn!("OUT >> {}", msg);
         }
 
-        tokio::spawn(async move {
-            Self::spawn_server_read_handler(
-                ws_rx,
-                internal_msg_tx,
-                addr,
-                auto_pong,
-                log_incoming_messages,
-            )
-            .await;
+        let read_handle = tokio::spawn(async move {
+            Self::spawn_server_read_handler(ws_rx, addr, log_incoming_messages).await;
         });
 
-        tokio::spawn(async move {
-            Self::spawn_server_write_handler(ws_tx, internal_msg_rx, usr_msg_rx).await;
+        let write_handle = tokio::spawn(async move {
+            Self::spawn_server_write_handler(ws_tx, usr_msg_rx).await;
         });
+
+        let _ = tokio::try_join!(read_handle, write_handle);
     }
 
     pub async fn start(self) {
@@ -162,7 +131,6 @@ impl Server {
                 stream,
                 usr_msg_tx.subscribe(),
                 self.settings.on_connect_message.as_ref(),
-                self.settings.auto_pong,
                 self.settings.log_incoming_messages,
             )
             .await;

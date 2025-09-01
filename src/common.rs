@@ -26,12 +26,7 @@ macro_rules! eprint_rn {
 
 #[inline]
 pub fn ping() -> Message {
-    Message::Ping(Bytes::from("ping"))
-}
-
-#[inline]
-pub fn pong() -> Message {
-    Message::Pong(Bytes::from("pong"))
+    Message::Ping(Bytes::new())
 }
 
 #[inline]
@@ -46,9 +41,16 @@ pub(crate) async fn async_send(
     ws: &mut SplitSink<WebSocketStream<impl AsyncRead + AsyncWrite + Unpin>, Message>,
     msg: Message,
 ) {
-    match ws.send(msg.clone()).await {
-        Ok(_) => print_rn!("OUT >> {}", msg),
-        Err(e) => eprint_rn!("Error sending message: {:?}", e),
+    if let Err(e) = ws.send(msg.clone()).await {
+        eprint_rn!("Error sending message: {:?}", e);
+        return;
+    }
+
+    match msg {
+        Message::Text(text) => print_rn!("OUT >> {text}"),
+        Message::Ping(_) => print_rn!("OUT >> ping"),
+        Message::Pong(_) => print_rn!("OUT >> pong"),
+        _ => {}
     }
 }
 

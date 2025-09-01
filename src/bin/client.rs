@@ -5,7 +5,6 @@ use wasabi::{Key, Message};
 async fn main() {
     let settings = wasabi::WebSocketSettings::builder()
         .on_connect_message(wasabi::Message::from("hello server"))
-        .auto_pong()
         .add_keybinding(Key::Char('t'), || Message::from("client test message"))
         .log_incoming_messages()
         .build()

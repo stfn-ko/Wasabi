@@ -12,7 +12,6 @@ pub enum WebSocketSettingsError {
 pub struct WebSocketSettings {
     pub keybindings: Option<Keybindings>,
     pub on_connect_message: Option<Message>,
-    pub auto_pong: bool,
     pub log_incoming_messages: bool,
 }
 
@@ -27,7 +26,6 @@ impl WebSocketSettings {
         Ok(WebSocketSettings {
             keybindings: src.keybindings,
             on_connect_message: src.on_connect_message,
-            auto_pong: src.auto_pong,
             log_incoming_messages: src.log_incoming_messages,
         })
     }
@@ -38,7 +36,6 @@ impl Default for WebSocketSettings {
         Self {
             keybindings: None,
             on_connect_message: None,
-            auto_pong: false,
             log_incoming_messages: false,
         }
     }
